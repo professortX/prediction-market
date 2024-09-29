@@ -28,6 +28,8 @@ import "pancake-v4-core/src/libraries/SafeCast.sol";
 import "pancake-v4-core/src/pool-cl/libraries/FixedPoint96.sol";
 import "pancake-v4-core/test/pool-cl/helpers/CLPoolManagerRouter.sol";
 import "pancake-v4-core/src/pool-cl/libraries/CLPoolParametersHelper.sol";
+import "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
+
 
 // Uniswap V4 Core Libraries and Contracts
 import {CLBaseHook} from "./CLBaseHook.sol";
@@ -60,13 +62,17 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
     mapping(bytes32 => Market) public markets;
     mapping(bytes32 => Event) public events;
 
-    // See all markets created by a user
     mapping(address => bytes32[]) public userMarkets;
-    mapping(PoolId => PoolKey) public poolKeys;
-    mapping(PoolId => Event) public poolIdToEvent;
 
-    mapping(PoolId => uint256 supply) public outcomeTokenCirculatingSupply; // Circulating supply of outcome tokens
-    mapping(PoolId => uint256 supply) public usdmAmountInPool; // Supply of USDM that can be withdrawn by the hook
+    mapping(PoolId => PoolKey) public poolKeys;
+    mapping(PoolId => bytes32 eventId) public poolIdToEventId;
+    mapping(PoolId => bytes32 marketId) public poolIdToMarketId;
+
+    // Circulating supply of outcome tokens
+    mapping(PoolId => uint256 supply) public outcomeTokenCirculatingSupply;
+    // Supply of USDM that can be withdrawn by the hook
+    mapping(PoolId => uint256 supply) public usdmAmountInPool;
+    // Keep track of liquidity provided by the hook, only keep tracks of latest
     mapping(PoolId => ICLPoolManager.ModifyLiquidityParams) public hookProvidedLiquidityForPool;
 
     /**
@@ -139,7 +145,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         // Initialize the event, create the market & deploy the oracle
         bytes32 eventId = _initializeEvent(_fee, _eventIpfsHash, outcomes, lpPools);
         oracle = _deployOracle(_eventIpfsHash);
-        marketId = _createMarket(_fee, eventId, oracle);
+        marketId = _createMarket(_fee, eventId, oracle, lpPools);
 
         return (marketId, lpPools, outcomes, oracle);
     }
@@ -231,6 +237,9 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
     function amountToClaim(bytes32 marketId) public view returns (uint256) {
         Market storage market = markets[marketId];
         Event storage pmmEvent = events[market.eventId];
+
+        require(market.stage == Stage.RESOLVED && pmmEvent.outcomeResolution >= 0, "Outcome not resolved");
+
         PoolId poolId = pmmEvent.lpPools[uint256(int256(pmmEvent.outcomeResolution))];
         PoolKey memory poolKey = poolKeys[poolId];
 
@@ -251,10 +260,11 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
 
     function claim(bytes32 marketId, uint256 outcomeTokenAmountToClaim) external nonReentrant returns (uint256 usdmAmountToClaim) {
         Market storage market = markets[marketId];
-        require(outcomeTokenAmountToClaim > 0, "Invalid amount to claim");
-        require(market.stage == Stage.RESOLVED, "Market not resolved");
-
         Event storage pmmEvent = events[market.eventId];
+
+        require(outcomeTokenAmountToClaim > 0, "Invalid amount to claim");
+        require(market.stage == Stage.RESOLVED && pmmEvent.outcomeResolution >= 0, "Market not resolved");
+
         PoolId poolId = pmmEvent.lpPools[uint256(int256(pmmEvent.outcomeResolution))];
         PoolKey memory poolKey = poolKeys[poolId];
 
@@ -457,7 +467,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
 
         // Map pool IDs to the event for easier indexing
         for (uint256 i = 0; i < lpPools.length; i++) {
-            poolIdToEvent[lpPools[i]] = newEvent;
+            poolIdToEventId[lpPools[i]] = eventId;
         }
 
         emit EventCreated(eventId);
@@ -471,7 +481,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
      * @param oracle The oracle used for the market
      * @return marketId The ID of the created market
      */
-    function _createMarket(uint24 fee, bytes32 eventId, IOracle oracle) internal returns (bytes32 marketId) {
+    function _createMarket(uint24 fee, bytes32 eventId, IOracle oracle, PoolId[] memory lpPools) internal returns (bytes32 marketId) {
         Market memory market = Market({
             stage: Stage.CREATED,
             creator: msg.sender,
@@ -485,6 +495,11 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         marketId = keccak256(abi.encode(market));
         markets[marketId] = market;
         userMarkets[msg.sender].push(marketId);
+
+         // Map pool IDs to the event for easier indexing
+        for (uint256 i = 0; i < lpPools.length; i++) {
+            poolIdToMarketId[lpPools[i]] = marketId;
+        }
 
         emit MarketCreated(marketId, msg.sender);
         return marketId;
@@ -515,37 +530,56 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         }
     }
 
-    /**
-     * @notice Gets the inverse square root price
-     * @param sqrtPriceX96 The square root price in Q64.96 format
-     * @return The inverse square root price
-     */
-    function getInverseSqrt(uint160 sqrtPriceX96) public pure returns (uint256) {
-        // sqrtPriceX96 is the sqrt(p) represented in Q64.96
-        // To get 1 / sqrt(p), divide 1 (represented as Q96) by sqrtPriceX96
-        return FullMath.mulDiv(FixedPoint96.Q96, FixedPoint96.Q96, uint256(sqrtPriceX96));
-    }
+    function getPriceInUsdm(PoolId poolId) public view returns (uint256) {
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(poolId);
+        require(sqrtPriceX96 != 0, "Invalid pool ID, price=0");
+        
+        uint256 sqrtPriceX96Uint = uint256(sqrtPriceX96);
+        PoolKey memory poolKey = poolKeys[poolId];
+        Currency curr0 = poolKey.currency0;
+        Currency curr1 = poolKey.currency1;
+        uint8 curr0Decimals = ERC20(Currency.unwrap(curr0)).decimals();
+        uint8 curr1Decimals = ERC20(Currency.unwrap(curr1)).decimals();
 
-    // Function to calculate the closest low tick
-    function getClosestLowTick(int24 tick) public pure returns (int24) {
-        // Convert uint16 tickSpacing to int24 in two steps
-        int24 remainder = tick % TICK_SPACING;
-        if (remainder < 0) {
-            return (tick / TICK_SPACING) * TICK_SPACING - TICK_SPACING;
-        } else {
-            return (tick / TICK_SPACING) * TICK_SPACING;
+        bool isCurr0Usdm = curr0.toId() == usdm.toId();
+        bool isCurr1Usdm = curr1.toId() == usdm.toId();
+
+        require(isCurr0Usdm || isCurr1Usdm, "Neither currency is USDM");
+
+        uint256 price;
+
+        if (isCurr0Usdm) {
+            // curr0 is USDM, calculate price of curr1 in terms of USDM (inverse price)
+            uint256 numerator = (1 << 192) * 1e18;
+            uint256 denominator = sqrtPriceX96Uint * sqrtPriceX96Uint;
+            uint256 decimalsDifference;
+
+            if (curr1Decimals >= curr0Decimals) {
+                decimalsDifference = curr1Decimals - curr0Decimals;
+                numerator *= 10 ** decimalsDifference;
+            } else {
+                decimalsDifference = curr0Decimals - curr1Decimals;
+                denominator *= 10 ** decimalsDifference;
+            }
+
+            price = numerator / denominator;
+        } else if (isCurr1Usdm) {
+            // curr1 is USDM, calculate price of curr0 in terms of USDM
+            uint256 numerator = sqrtPriceX96Uint * sqrtPriceX96Uint * 1e18;
+            uint256 denominator = 1 << 192;
+            uint256 decimalsDifference;
+
+            if (curr0Decimals >= curr1Decimals) {
+                decimalsDifference = curr0Decimals - curr1Decimals;
+                numerator *= 10 ** decimalsDifference;
+            } else {
+                decimalsDifference = curr1Decimals - curr0Decimals;
+                denominator *= 10 ** decimalsDifference;
+            }
+
+            price = numerator / denominator;
         }
-    }
 
-    // Function to calculate the closest high tick
-    function getClosestHighTick(int24 tick) public pure returns (int24) {
-        // Convert uint16 tickSpacing to int24 in two steps
-        int24 closestLowTick = getClosestLowTick(tick);
-
-        if (tick % TICK_SPACING == 0) {
-            return closestLowTick; // Tick is exactly on a spacing boundary
-        } else {
-            return closestLowTick + TICK_SPACING;
-        }
+        return price;
     }
 }

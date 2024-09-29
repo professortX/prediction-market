@@ -35,7 +35,8 @@ import {BalanceDeltaLibrary} from "pancake-v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "pancake-v4-core/src/types/Currency.sol";
 import {IOracle} from "./interface/IOracle.sol";
 import {CLPoolManagerRouter} from "pancake-v4-core/test/pool-cl/helpers/CLPoolManagerRouter.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
+import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {CLBaseHook} from "./CLBaseHook.sol";
 import {PredictionMarket} from "./PredictionMarket.sol";
 
@@ -55,6 +56,7 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
      * @dev Invalid PoolId
      */
     error InvalidPoolId(PoolId poolId);
+
     error SwapDisabled(PoolId poolId);
     error EventNotFound(PoolId poolId);
     error MarketNotFound(PoolId poolId);
@@ -82,41 +84,28 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         onlyPoolManager
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // @dev - Check if outcome has been set
-        Event memory pmEvent = poolIdToEvent[key.toId()];
-        if (!pmEvent.isOutcomeSet) {
+                // Disable swaps if outcome is set
+        bytes32 eventId = poolIdToEventId[key.toId()];
+        bytes32 marketId = poolIdToMarketId[key.toId()];
+
+        if (eventId == bytes32(0)) {
+            revert EventNotFound(key.toId());
+        }
+
+        if (marketId == bytes32(0)) {
+            revert MarketNotFound(key.toId());
+        }
+
+        Event memory pmEvent = events[eventId];
+        Market memory pmMarket = markets[marketId];
+
+        // Only allowed to swap if outcome is not set and market is started
+        if (!pmEvent.isOutcomeSet && pmMarket.stage == Stage.STARTED) {
             return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
-        // After outcome is set, cannot buy outcome tokens, only claim
-        bool isBuyingOutcomeTokens;
-
-        if (swapParams.zeroForOne) {
-            isBuyingOutcomeTokens = key.currency0.toId() == usdm.toId();
-        } else {
-            isBuyingOutcomeTokens = key.currency1.toId() == usdm.toId();
-        }
-        if (isBuyingOutcomeTokens) {
-            revert("Outcome has been set, cannot buy outcome tokens");
-        }
-
-        // Only allow exactInput when claiming
-        if (swapParams.amountSpecified > 0) {
-            revert("Only exactInput is allowed when claiming");
-        }
-
-        // Circulating supply
-        uint256 circulatingSupply = outcomeTokenCirculatingSupply[key.toId()];
-        if (circulatingSupply == 0) {
-            // DO NOT SWAP here
-            return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-        }
-
-        // Get initial total amount of collateral tokens in the pool
-
-        int128 amountToSettle; // Implement based on claim mechanism
-        BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(int128(-swapParams.amountSpecified), amountToSettle);
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        // Revert if outcome is set OR market is not started
+        revert SwapDisabled(key.toId());
     }
 
     function afterSwap(
@@ -126,7 +115,10 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         BalanceDelta delta,
         bytes calldata
     ) external override onlyPoolManager returns (bytes4, int128) {
-        Event memory pmEvent = poolIdToEvent[poolKey.toId()];
+        bytes32 eventId = poolIdToEventId[poolKey.toId()];
+        Event memory pmEvent = events[eventId];
+
+        // Should not do accounting anymore if outcome is set
 
         if (pmEvent.isOutcomeSet) {
             return (this.afterSwap.selector, 0);
@@ -190,60 +182,6 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         bytes calldata hookData
     ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
-    }
-
-    function getPriceInUsdm(PoolId poolId) public view returns (uint256) {
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
-        if (sqrtPriceX96 == 0) {
-            revert InvalidPoolId(poolId);
-        }
-        uint256 sqrtPriceX96Uint = uint256(sqrtPriceX96);
-        PoolKey memory poolKey = poolKeys[poolId];
-        Currency curr0 = poolKey.currency0;
-        Currency curr1 = poolKey.currency1;
-        uint8 curr0Decimals = ERC20(Currency.unwrap(curr0)).decimals();
-        uint8 curr1Decimals = ERC20(Currency.unwrap(curr1)).decimals();
-
-        bool isCurr0Usdm = curr0.toId() == usdm.toId();
-        bool isCurr1Usdm = curr1.toId() == usdm.toId();
-
-        require(isCurr0Usdm || isCurr1Usdm, "Neither currency is USDM");
-
-        uint256 price;
-
-        if (isCurr0Usdm) {
-            // curr0 is USDM, calculate price of curr1 in terms of USDM (inverse price)
-            uint256 numerator = (1 << 192) * 1e18;
-            uint256 denominator = sqrtPriceX96Uint * sqrtPriceX96Uint;
-            uint256 decimalsDifference;
-
-            if (curr1Decimals >= curr0Decimals) {
-                decimalsDifference = curr1Decimals - curr0Decimals;
-                numerator *= 10 ** decimalsDifference;
-            } else {
-                decimalsDifference = curr0Decimals - curr1Decimals;
-                denominator *= 10 ** decimalsDifference;
-            }
-
-            price = numerator / denominator;
-        } else if (isCurr1Usdm) {
-            // curr1 is USDM, calculate price of curr0 in terms of USDM
-            uint256 numerator = sqrtPriceX96Uint * sqrtPriceX96Uint * 1e18;
-            uint256 denominator = 1 << 192;
-            uint256 decimalsDifference;
-
-            if (curr0Decimals >= curr1Decimals) {
-                decimalsDifference = curr0Decimals - curr1Decimals;
-                numerator *= 10 ** decimalsDifference;
-            } else {
-                decimalsDifference = curr1Decimals - curr0Decimals;
-                denominator *= 10 ** decimalsDifference;
-            }
-
-            price = numerator / denominator;
-        }
-
-        return price;
     }
 
 }

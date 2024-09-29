@@ -63,4 +63,8 @@ interface IPredictionMarket {
     function settle(bytes32 marketId, int16 outcome) external;
 
     function isMarketResolved(bytes32 marketId) external view returns (bool);
+
+    function amountToClaim(bytes32 marketId) external view returns (uint256);
+
+    function claim(bytes32 marketId, uint256 outcomeTokenAmountToClaim) external returns (uint256);
 }

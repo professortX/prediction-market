@@ -30,6 +30,9 @@ import {CLPoolParametersHelper} from "pancake-v4-core/src/pool-cl/libraries/CLPo
 import {CLTestUtils} from "./utils/CLTestUtils.sol";
 import {CLPoolManagerRouter} from "pancake-v4-core/test/pool-cl/helpers/CLPoolManagerRouter.sol";
 
+// Console.sol
+import {console} from "forge-std/console.sol";
+
 
 /**
  * What is liquidity delta?
@@ -195,6 +198,66 @@ contract PredictionMarketHookTest is Test, CLTestUtils, Deployers {
         vm.expectRevert();
         predictionMarketHook.claim(marketId, outcomeTokenAmountToClaim);
     }
+
+    function test_revertIfSwapOnNotStartedMarket() public {
+        // get balance in poolManager
+        uint256 balanceOfYes = IERC20Minimal(Currency.unwrap(yes)).balanceOf(address(vault));
+
+        // We want to swap USDM to YES, so take the opposite of the sorted pair
+        bool isYesToken0 = yesUsdmLp[0].toId() == yes.toId();
+
+        // 1e16 = $0.01
+        ICLPoolManager.SwapParams memory params = ICLPoolManager.SwapParams({
+            zeroForOne: !isYesToken0, // swap from USDM to YES
+            amountSpecified: uintToInt(balanceOfYes - 1e3), // exactOutput, giving 1e3 as some form of buffer
+            // $YES token0 -> ticks go "->", so max slippage is MAX_TICK - 1
+            // $YES token1 -> ticks go "<-", so max slippage is MIN_TICK + 1
+            sqrtPriceLimitX96: isYesToken0 ? MAX_PRICE_LIMIT : MIN_PRICE_LIMIT
+        });
+
+        CLPoolManagerRouter.SwapTestSettings memory swapTestSettings =
+                             CLPoolManagerRouter.SwapTestSettings({withdrawTokens: true, settleUsingTransfer: true});
+
+        vm.expectRevert();
+        router.swap(yesUsdmKey, params, swapTestSettings, ZERO_BYTES);
+    }
+
+    function test_swapAllToYes() public {
+        // get balance in poolManager
+        uint256 balanceOfYes = IERC20Minimal(Currency.unwrap(yes)).balanceOf(address(vault));
+
+        // Start market to enable swapping
+        predictionMarketHook.startMarket(marketId);
+
+        // We want to swap USDM to YES, so take the opposite of the sorted pair
+        bool isYesToken0 = yesUsdmLp[0].toId() == yes.toId();
+
+        // Calculate amountSpecified
+        int256 amountSpecified;
+        unchecked {
+            amountSpecified = uintToInt(balanceOfYes - 1e3); // exactOutput, giving 1e3 as some form of buffer
+        }
+
+        // 1e16 = $0.01
+        ICLPoolManager.SwapParams memory params = ICLPoolManager.SwapParams({
+            zeroForOne: !isYesToken0, // swap from USDM to YES
+            amountSpecified: amountSpecified,
+            // $YES token0 -> ticks go "->", so max slippage is MAX_TICK - 1
+            // $YES token1 -> ticks go "<-", so max slippage is MIN_TICK + 1
+            sqrtPriceLimitX96: isYesToken0 ? MAX_PRICE_LIMIT : MIN_PRICE_LIMIT
+        });
+
+        CLPoolManagerRouter.SwapTestSettings memory swapTestSettings =
+                CLPoolManagerRouter.SwapTestSettings({withdrawTokens: true, settleUsingTransfer: true});
+        
+        router.swap(yesUsdmKey, params, swapTestSettings, ZERO_BYTES);
+
+        uint256 balanceOfYesAfterSwap = IERC20Minimal(Currency.unwrap(yes)).balanceOf(address(vault));
+
+        (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) =
+            poolManager.getSlot0(yesUsdmKey.toId());
+    }
+
 
      // Helper function
     function uintToInt(uint256 _value) internal pure returns (int256) {
