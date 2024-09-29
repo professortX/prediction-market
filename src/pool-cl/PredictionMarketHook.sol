@@ -27,77 +27,30 @@ import {ICLHooks} from "pancake-v4-core/src/pool-cl/interfaces/ICLHooks.sol";
 import {ICLPoolManager} from "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
 import {CLPoolManager} from "pancake-v4-core/src/pool-cl/CLPoolManager.sol";
 
-// import {BaseHook} from "v4-periphery/BaseHook.sol";
-
 import {Hooks} from "pancake-v4-core/src/libraries/Hooks.sol";
-// import {PoolKey} from "pancake-v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "pancake-v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "pancake-v4-core/src/types/BalanceDelta.sol";
-// import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "pancake-v4-core/src/types/BeforeSwapDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "pancake-v4-core/src/types/BeforeSwapDelta.sol";
 import {BalanceDeltaLibrary} from "pancake-v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "pancake-v4-core/src/types/Currency.sol";
 import {IOracle} from "./interface/IOracle.sol";
-// import {PredictionMarket} from "./PredictionMarket.sol";
-import {IPoolManager} from "pancake-v4-core/src/interfaces/IPoolManager.sol";
-// import {StateLibrary} from "pancake-v4-core/src/libraries/StateLibrary.sol";
-// import {CurrencySettler} from "pancake-v4-core/test/utils/CurrencySettler.sol";
-// import {TransientStateLibrary} from "pancake-v4-core/src/libraries/TransientStateLibrary.sol";
-// import {NoDelegateCall} from "pancake-v4-core/src/NoDelegateCall.sol";
-import {console} from "forge-std/console.sol";
+import {CLPoolManagerRouter} from "pancake-v4-core/test/pool-cl/helpers/CLPoolManagerRouter.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-// import {PoolModifyLiquidityTest} from "pancake-v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {CLBaseHook} from "./CLBaseHook.sol";
+import {PredictionMarket} from "./PredictionMarket.sol";
+
 
 // contract PredictionMarketHook is ICLHooks, PredictionMarket, NoDelegateCall {
-contract PredictionMarketHook is ICLHooks {
-    // using PoolIdLibrary for PoolKey;
-    // using StateLibrary for IPoolManager;
-    // using CurrencySettler for Currency;
-    // using CurrencyLibrary for Currency;
-    // using TransientStateLibrary for IPoolManager;
+contract PredictionMarketHook is CLBaseHook, PredictionMarket {
+    using PoolIdLibrary for PoolKey;
 
     // NOTE: ---------------------------------------------------------
     // state variables should typically be unique to a pool
     // a single hook contract should be able to service multiple pools
     // ---------------------------------------------------------------
+    address immutable private originalAddress;
 
-        error NotPoolManager();
-    error NotVault();
-    error NotSelf();
-    error InvalidPool();
-    error LockFailure();
-    error HookNotImplemented();
-
-    struct Permissions {
-        bool beforeInitialize;
-        bool afterInitialize;
-        bool beforeAddLiquidity;
-        bool afterAddLiquidity;
-        bool beforeRemoveLiquidity;
-        bool afterRemoveLiquidity;
-        bool beforeSwap;
-        bool afterSwap;
-        bool beforeDonate;
-        bool afterDonate;
-        bool beforeSwapReturnsDelta;
-        bool afterSwapReturnsDelta;
-        bool afterAddLiquidityReturnsDelta;
-        bool afterRemoveLiquidityReturnsDelta;
-    }
-
-    /// @notice The address of the pool manager
-    ICLPoolManager public immutable poolManager;
-
-    /// @notice The address of the vault
-    IVault public immutable vault;
-
-    // constructor(Currency _usdm, IPoolManager _poolManager, PoolModifyLiquidityTest _poolModifyLiquidityTest)
-    //     PredictionMarket(_usdm, _poolManager, _poolModifyLiquidityTest)
-    //     BaseHook(_poolManager)
-    // {}
-
-    constructor(Currency _usdm, IPoolManager _poolManager){
-        poolManager = _poolManager;
-    }
+    constructor(Currency _usdm, ICLPoolManager _poolManager, CLPoolManagerRouter _modifyLiquidityRouter) PredictionMarket(_usdm, _poolManager, _modifyLiquidityRouter) CLBaseHook(_poolManager) {}
 
     /**
      * @dev Invalid PoolId
@@ -109,49 +62,21 @@ contract PredictionMarketHook is ICLHooks {
         _;
     }
 
-    // function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-    //     return Hooks.Permissions({
-    //         beforeInitialize: true, // Deploy oracles, initialize market, event
-    //         afterInitialize: false,
-    //         beforeAddLiquidity: true, // Only allow hook to add liquidity
-    //         afterAddLiquidity: true, // Track supply of USDM
-    //         beforeRemoveLiquidity: true, // Only allow hook to remove liquidity
-    //         afterRemoveLiquidity: true, // Track supply of USDM
-    //         beforeSwap: true, // Check if outcome has been set
-    //         afterSwap: true, // Calculate supply of outcome tokens in pool
-    //         beforeDonate: false,
-    //         afterDonate: false,
-    //         beforeSwapReturnDelta: false, // Claim function for outcome tokens
-    //         afterSwapReturnDelta: false,
-    //         afterAddLiquidityReturnDelta: false,
-    //         afterRemoveLiquidityReturnDelta: false
-    //     });
-    // }
-
-    function _hooksRegistrationBitmapFrom(Permissions memory permissions) internal pure returns (uint16) {
-        return uint16(
-            (permissions.beforeInitialize ? 1 << HOOKS_BEFORE_INITIALIZE_OFFSET : 0)
-                | (permissions.afterInitialize ? 1 << HOOKS_AFTER_INITIALIZE_OFFSET : 0)
-                | (permissions.beforeAddLiquidity ? 1 << HOOKS_BEFORE_ADD_LIQUIDITY_OFFSET : 0)
-                | (permissions.afterAddLiquidity ? 1 << HOOKS_AFTER_ADD_LIQUIDITY_OFFSET : 0)
-                | (permissions.beforeRemoveLiquidity ? 1 << HOOKS_BEFORE_REMOVE_LIQUIDITY_OFFSET : 0)
-                | (permissions.afterRemoveLiquidity ? 1 << HOOKS_AFTER_REMOVE_LIQUIDITY_OFFSET : 0)
-                | (permissions.beforeSwap ? 1 << HOOKS_BEFORE_SWAP_OFFSET : 0)
-                | (permissions.afterSwap ? 1 << HOOKS_AFTER_SWAP_OFFSET : 0)
-                | (permissions.beforeDonate ? 1 << HOOKS_BEFORE_DONATE_OFFSET : 0)
-                | (permissions.afterDonate ? 1 << HOOKS_AFTER_DONATE_OFFSET : 0)
-                | (permissions.beforeSwapReturnsDelta ? 1 << HOOKS_BEFORE_SWAP_RETURNS_DELTA_OFFSET : 0)
-                | (permissions.afterSwapReturnsDelta ? 1 << HOOKS_AFTER_SWAP_RETURNS_DELTA_OFFSET : 0)
-                | (permissions.afterAddLiquidityReturnsDelta ? 1 << HOOKS_AFTER_ADD_LIQUIDIY_RETURNS_DELTA_OFFSET : 0)
-                | (permissions.afterRemoveLiquidityReturnsDelta ? 1 << HOOKS_AFTER_REMOVE_LIQUIDIY_RETURNS_DELTA_OFFSET : 0)
-        );
+    modifier noDelegateCall() {
+        require(address(this) == originalAddress, "no delegate call");
+        _;
     }
 
+    function getHooksRegistrationBitmap() external pure override returns (uint16) {
+        return PredictionMarket.getInternalHooksRegistrationBitmap();
+    }
+
+ 
     // -----------------------------------------------
     // NOTE: see IHooks.sol for function documentation
     // -----------------------------------------------
     function beforeInitialize(address, PoolKey calldata, uint160, bytes calldata) external override returns (bytes4) {
-        return (BaseHook.beforeInitialize.selector);
+        return (CLBaseHook.beforeInitialize.selector);
     }
 
     function beforeSwap(address, PoolKey calldata key, ICLPoolManager.SwapParams calldata swapParams, bytes calldata)
@@ -272,7 +197,7 @@ contract PredictionMarketHook is ICLHooks {
     }
 
     function getPriceInUsdm(PoolId poolId) public view returns (uint256) {
-        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(poolManager, poolId);
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
         if (sqrtPriceX96 == 0) {
             revert InvalidPoolId(poolId);
         }
@@ -325,85 +250,4 @@ contract PredictionMarketHook is ICLHooks {
         return price;
     }
 
-        function beforeInitialize(address, PoolKey calldata, uint160, bytes calldata) external virtual returns (bytes4) {
-        revert HookNotImplemented();
-    }
-
-    function afterInitialize(address, PoolKey calldata, uint160, int24, bytes calldata)
-        external
-        virtual
-        returns (bytes4)
-    {
-        revert HookNotImplemented();
-    }
-
-    function beforeAddLiquidity(
-        address,
-        PoolKey calldata,
-        ICLPoolManager.ModifyLiquidityParams calldata,
-        bytes calldata
-    ) external virtual returns (bytes4) {
-        revert HookNotImplemented();
-    }
-
-    function afterAddLiquidity(
-        address,
-        PoolKey calldata,
-        ICLPoolManager.ModifyLiquidityParams calldata,
-        BalanceDelta,
-        bytes calldata
-    ) external virtual returns (bytes4, BalanceDelta) {
-        revert HookNotImplemented();
-    }
-
-    function beforeRemoveLiquidity(
-        address,
-        PoolKey calldata,
-        ICLPoolManager.ModifyLiquidityParams calldata,
-        bytes calldata
-    ) external virtual returns (bytes4) {
-        revert HookNotImplemented();
-    }
-
-    function afterRemoveLiquidity(
-        address,
-        PoolKey calldata,
-        ICLPoolManager.ModifyLiquidityParams calldata,
-        BalanceDelta,
-        bytes calldata
-    ) external virtual returns (bytes4, BalanceDelta) {
-        revert HookNotImplemented();
-    }
-
-    function beforeSwap(address, PoolKey calldata, ICLPoolManager.SwapParams calldata, bytes calldata)
-        external
-        virtual
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
-        revert HookNotImplemented();
-    }
-
-    function afterSwap(address, PoolKey calldata, ICLPoolManager.SwapParams calldata, BalanceDelta, bytes calldata)
-        external
-        virtual
-        returns (bytes4, int128)
-    {
-        revert HookNotImplemented();
-    }
-
-    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
-        external
-        virtual
-        returns (bytes4)
-    {
-        revert HookNotImplemented();
-    }
-
-    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
-        external
-        virtual
-        returns (bytes4)
-    {
-        revert HookNotImplemented();
-    }
 }
