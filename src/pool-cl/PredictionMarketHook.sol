@@ -40,7 +40,6 @@ import {CLBaseHook} from "./CLBaseHook.sol";
 import {PredictionMarket} from "./PredictionMarket.sol";
 
 
-// contract PredictionMarketHook is ICLHooks, PredictionMarket, NoDelegateCall {
 contract PredictionMarketHook is CLBaseHook, PredictionMarket {
     using PoolIdLibrary for PoolKey;
 
@@ -56,14 +55,12 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
      * @dev Invalid PoolId
      */
     error InvalidPoolId(PoolId poolId);
+    error SwapDisabled(PoolId poolId);
+    error EventNotFound(PoolId poolId);
+    error MarketNotFound(PoolId poolId);
 
     modifier onlyPoolManager() {
         require(msg.sender == address(poolManager));
-        _;
-    }
-
-    modifier noDelegateCall() {
-        require(address(this) == originalAddress, "no delegate call");
         _;
     }
 
@@ -161,7 +158,6 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         external
         override
         onlyPoolManager
-        noDelegateCall
         returns (bytes4)
     {
         return (this.beforeAddLiquidity.selector);
@@ -172,7 +168,7 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         PoolKey calldata,
         ICLPoolManager.ModifyLiquidityParams calldata,
         bytes calldata
-    ) external override onlyPoolManager noDelegateCall returns (bytes4) {
+    ) external override onlyPoolManager returns (bytes4) {
         return (this.beforeRemoveLiquidity.selector);
     }
 
@@ -182,7 +178,7 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         ICLPoolManager.ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override onlyPoolManager noDelegateCall returns (bytes4, BalanceDelta) {
+    ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
@@ -192,7 +188,7 @@ contract PredictionMarketHook is CLBaseHook, PredictionMarket {
         ICLPoolManager.ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override onlyPoolManager noDelegateCall returns (bytes4, BalanceDelta) {
+    ) external override onlyPoolManager returns (bytes4, BalanceDelta) {
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
