@@ -32,9 +32,9 @@ import {CLPoolManager} from "pancake-v4-core/src/pool-cl/CLPoolManager.sol";
 import {Hooks} from "pancake-v4-core/src/libraries/Hooks.sol";
 // import {PoolKey} from "pancake-v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "pancake-v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "pancake-v4-core/src/types/BalanceDelta.sol";
+// import {BalanceDelta} from "pancake-v4-core/src/types/BalanceDelta.sol";
 // import {BeforeSwapDelta, BeforeSwapDeltaLibrary, toBeforeSwapDelta} from "pancake-v4-core/src/types/BeforeSwapDelta.sol";
-import {BalanceDeltaLibrary} from "pancake-v4-core/src/types/BalanceDelta.sol";
+import {BalanceDeltaLibrary, BalanceDelta} from "pancake-v4-core/src/types/BalanceDelta.sol";
 import {Currency, CurrencyLibrary} from "pancake-v4-core/src/types/Currency.sol";
 import {IOracle} from "./interface/IOracle.sol";
 // import {PredictionMarket} from "./PredictionMarket.sol";
@@ -45,10 +45,12 @@ import {IPoolManager} from "pancake-v4-core/src/interfaces/IPoolManager.sol";
 // import {NoDelegateCall} from "pancake-v4-core/src/NoDelegateCall.sol";
 import {console} from "forge-std/console.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "./interface/IPredictionMarket.sol";
+
 // import {PoolModifyLiquidityTest} from "pancake-v4-core/src/test/PoolModifyLiquidityTest.sol";
 
 // contract PredictionMarketHook is ICLHooks, PredictionMarket, NoDelegateCall {
-contract PredictionMarketHook is ICLHooks {
+contract PredictionMarketHook is ICLHooks, IPredictionMarket {
     // using PoolIdLibrary for PoolKey;
     // using StateLibrary for IPoolManager;
     // using CurrencySettler for Currency;
@@ -60,7 +62,7 @@ contract PredictionMarketHook is ICLHooks {
     // a single hook contract should be able to service multiple pools
     // ---------------------------------------------------------------
 
-        error NotPoolManager();
+    error NotPoolManager();
     error NotVault();
     error NotSelf();
     error InvalidPool();
@@ -151,7 +153,7 @@ contract PredictionMarketHook is ICLHooks {
     // NOTE: see IHooks.sol for function documentation
     // -----------------------------------------------
     function beforeInitialize(address, PoolKey calldata, uint160, bytes calldata) external override returns (bytes4) {
-        return (BaseHook.beforeInitialize.selector);
+        return (ICLHooks.beforeInitialize.selector);
     }
 
     function beforeSwap(address, PoolKey calldata key, ICLPoolManager.SwapParams calldata swapParams, bytes calldata)
@@ -236,7 +238,7 @@ contract PredictionMarketHook is ICLHooks {
         external
         override
         onlyPoolManager
-        noDelegateCall
+        // noDelegateCall
         returns (bytes4)
     {
         return (this.beforeAddLiquidity.selector);
@@ -247,7 +249,9 @@ contract PredictionMarketHook is ICLHooks {
         PoolKey calldata,
         ICLPoolManager.ModifyLiquidityParams calldata,
         bytes calldata
-    ) external override onlyPoolManager noDelegateCall returns (bytes4) {
+    ) external override onlyPoolManager
+    //  noDelegateCall 
+     returns (bytes4) {
         return (this.beforeRemoveLiquidity.selector);
     }
 
@@ -257,7 +261,9 @@ contract PredictionMarketHook is ICLHooks {
         ICLPoolManager.ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override onlyPoolManager noDelegateCall returns (bytes4, BalanceDelta) {
+    ) external override onlyPoolManager
+    //  noDelegateCall
+      returns (bytes4, BalanceDelta) {
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
@@ -267,7 +273,9 @@ contract PredictionMarketHook is ICLHooks {
         ICLPoolManager.ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override onlyPoolManager noDelegateCall returns (bytes4, BalanceDelta) {
+    ) external override onlyPoolManager
+    //  noDelegateCall 
+     returns (bytes4, BalanceDelta) {
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
