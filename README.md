@@ -1,16 +1,31 @@
-# Pancake v4 hooks template
+# Vorhersage
+### **Powered by Pancakeswap v4 Hooks 🥞🐰🥞**
+Unlimited Upside Tokenized
+Prediction Market
 
-[`Use this Template`](https://github.com/new?owner=pancakeswap&template_name=pancake-v4-hooks-template&template_owner=pancakeswap)
+Vorhersage is a prediction market that uses memecoins to forecast real life events. Each outcome is represented as an ERC20 token. The protocol uses single-sided liquidity pools on Pancakeswap to bootstrap liquidity for these ERC20 tokens.
 
-## Prerequisite
+ERC20 tokens offer traders the potential for unlimited upside, enhancing the overall trading experience.
 
-1. Install foundry, see https://book.getfoundry.sh/getting-started/installation
+At the end of the settlement date, a portion of the trading fees and the entire USD reserves of the losing pool will be distributed the holders of the winning outcome token. Eigenlayer AVS / Optimistic Oracles (e.g. UMA) will be used as an oracle to determine the event outcome.
 
-## Running test
+---
 
-1. Install dependencies with `forge install`
-2. Run test with `forge test`
+## Set up
 
-## Description
+*requires [foundry](https://book.getfoundry.sh)*
 
-This repository contains example counter hook for both CL and Bin pool types. 
+```
+forge install
+forge test
+```
+
+### Local Development (Anvil)
+
+Other than writing unit tests (recommended!), you can only deploy & test hooks on [anvil](https://book.getfoundry.sh/anvil/)
+
+```bash
+./setup-local.sh
+```
+
+To kill the anvil process, you may run `kill-anvil.sh`.
