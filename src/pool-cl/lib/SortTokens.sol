@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Currency} from "v4-core/src/types/Currency.sol";
+import {Currency} from "pancake-v4-core/src/types/Currency.sol";
 
 library SortTokens {
     function sort(IERC20 tokenA, IERC20 tokenB) internal pure returns (Currency _currency0, Currency _currency1) {

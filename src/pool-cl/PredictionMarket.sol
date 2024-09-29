@@ -11,27 +11,29 @@ import "./interface/IPredictionMarket.sol";
 import "./OutcomeToken.sol";
 import "./CentralisedOracle.sol";
 import "./lib/SortTokens.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import "openzeppelin/security/ReentrancyGuard.sol";
+import "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+
+import "pancake-v4-core/src/types/Currency.sol";
+import "pancake-v4-core/src/types/PoolKey.sol";
+import "pancake-v4-core/src/types/PoolId.sol";
+import "pancake-v4-core/src/pool-cl/libraries/TickMath.sol";
+import "pancake-v4-core/src/pool-cl/interfaces/ICLHooks.sol";
+import "pancake-v4-core/src/pool-cl/CLPoolManager.sol";
+import "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
+import "pancake-v4-core/src/types/BalanceDelta.sol";
+
+import "pancake-v4-core/src/pool-cl/libraries/FullMath.sol";
+import "pancake-v4-core/src/libraries/SafeCast.sol";
+import "pancake-v4-core/src/pool-cl/libraries/FixedPoint96.sol";
+import "pancake-v4-core/test/pool-cl/helpers/CLPoolManagerRouter.sol";
+import "pancake-v4-core/src/pool-cl/libraries/CLPoolParametersHelper.sol";
+import "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
+
 
 // Uniswap V4 Core Libraries and Contracts
-import "v4-core/src/types/Currency.sol";
-import "v4-core/src/types/PoolKey.sol";
-import "v4-core/src/types/PoolId.sol";
-import "v4-core/src/libraries/TickMath.sol";
-import "v4-core/src/interfaces/IHooks.sol";
-import "v4-core/src/PoolManager.sol";
-import "v4-core/src/interfaces/IPoolManager.sol";
-import "v4-core/src/libraries/Hooks.sol";
-import "v4-core/src/types/BalanceDelta.sol";
-import "v4-core/src/libraries/TransientStateLibrary.sol";
-import "v4-core/src/libraries/StateLibrary.sol";
-import "v4-core/src/libraries/FullMath.sol";
-import "v4-core/src/libraries/SafeCast.sol";
-import "v4-core/src/libraries/FixedPoint96.sol";
-import "v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {CLBaseHook} from "./CLBaseHook.sol";
 
-import {console} from "forge-std/console.sol";
 
 /**
  * @title PredictionMarket
@@ -39,10 +41,10 @@ import {console} from "forge-std/console.sol";
  */
 abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
     using PoolIdLibrary for PoolKey;
-    using TransientStateLibrary for IPoolManager;
+    // using TransientStateLibrary for ICLPoolManager;
     using BalanceDeltaLibrary for BalanceDelta;
     using CurrencyLibrary for Currency;
-    using StateLibrary for IPoolManager;
+    // using StateLibrary for ICLPoolManager;
     using FullMath for uint256;
 
     // Constants
@@ -53,32 +55,37 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
 
     // State Variables
     Currency public immutable usdm;
-    IPoolManager private immutable manager;
-    PoolModifyLiquidityTest private immutable modifyLiquidityRouter;
+    ICLPoolManager private immutable manager;
+    CLPoolManagerRouter private immutable modifyLiquidityRouter;
 
     // Mappings
     mapping(bytes32 => Market) public markets;
     mapping(bytes32 => Event) public events;
 
-    // See all markets created by a user
     mapping(address => bytes32[]) public userMarkets;
-    mapping(PoolId => PoolKey) public poolKeys;
-    mapping(PoolId => Event) public poolIdToEvent;
 
-    mapping(PoolId => uint256 supply) public outcomeTokenCirculatingSupply; // Circulating supply of outcome tokens
-    mapping(PoolId => uint256 supply) public usdmAmountInPool; // Supply of USDM that can be withdrawn by the hook
-    mapping(PoolId => IPoolManager.ModifyLiquidityParams) public hookProvidedLiquidityForPool;
+    mapping(PoolId => PoolKey) public poolKeys;
+    mapping(PoolId => bytes32 eventId) public poolIdToEventId;
+    mapping(PoolId => bytes32 marketId) public poolIdToMarketId;
+
+    // Circulating supply of outcome tokens
+    mapping(PoolId => uint256 supply) public outcomeTokenCirculatingSupply;
+    // Supply of USDM that can be withdrawn by the hook
+    mapping(PoolId => uint256 supply) public usdmAmountInPool;
+    // Keep track of liquidity provided by the hook, only keep tracks of latest
+    mapping(PoolId => ICLPoolManager.ModifyLiquidityParams) public hookProvidedLiquidityForPool;
 
     /**
      * @notice Constructor
      * @param _usdm The USDM currency used as collateral
      * @param _poolManager The Uniswap V4 PoolManager contract
      */
-    constructor(Currency _usdm, IPoolManager _poolManager, PoolModifyLiquidityTest _modifyLiquidityRouter) {
+    constructor(Currency _usdm, ICLPoolManager _poolManager, CLPoolManagerRouter _modifyLiquidityRouter) {
         usdm = _usdm;
         manager = _poolManager;
         modifyLiquidityRouter = _modifyLiquidityRouter;
     }
+    
 
     /**
      * @notice Initializes outcome tokens and their pools
@@ -138,7 +145,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         // Initialize the event, create the market & deploy the oracle
         bytes32 eventId = _initializeEvent(_fee, _eventIpfsHash, outcomes, lpPools);
         oracle = _deployOracle(_eventIpfsHash);
-        marketId = _createMarket(_fee, eventId, oracle);
+        marketId = _createMarket(_fee, eventId, oracle, lpPools);
 
         return (marketId, lpPools, outcomes, oracle);
     }
@@ -198,14 +205,14 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
             PoolId poolId = pmmEvent.lpPools[i];
             PoolKey memory poolKey = poolKeys[poolId];
 
-            IPoolManager.ModifyLiquidityParams memory liquidityParams = hookProvidedLiquidityForPool[poolId];
+            ICLPoolManager.ModifyLiquidityParams memory liquidityParams = hookProvidedLiquidityForPool[poolId];
 
             // Negate the liquidityDelta to remove liquidity
             liquidityParams.liquidityDelta = -liquidityParams.liquidityDelta;
 
             // Remove liquidity and get the balance delta
-            BalanceDelta delta =
-                modifyLiquidityRouter.modifyLiquidity(poolKey, liquidityParams, ZERO_BYTES, false, false);
+            (BalanceDelta delta, ) =
+                modifyLiquidityRouter.modifyPosition(poolKey, liquidityParams, ZERO_BYTES);
 
             delete hookProvidedLiquidityForPool[poolId];
 
@@ -230,6 +237,9 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
     function amountToClaim(bytes32 marketId) public view returns (uint256) {
         Market storage market = markets[marketId];
         Event storage pmmEvent = events[market.eventId];
+
+        require(market.stage == Stage.RESOLVED && pmmEvent.outcomeResolution >= 0, "Outcome not resolved");
+
         PoolId poolId = pmmEvent.lpPools[uint256(int256(pmmEvent.outcomeResolution))];
         PoolKey memory poolKey = poolKeys[poolId];
 
@@ -250,10 +260,11 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
 
     function claim(bytes32 marketId, uint256 outcomeTokenAmountToClaim) external nonReentrant returns (uint256 usdmAmountToClaim) {
         Market storage market = markets[marketId];
-        require(outcomeTokenAmountToClaim > 0, "Invalid amount to claim");
-        require(market.stage == Stage.RESOLVED, "Market not resolved");
-
         Event storage pmmEvent = events[market.eventId];
+
+        require(outcomeTokenAmountToClaim > 0, "Invalid amount to claim");
+        require(market.stage == Stage.RESOLVED && pmmEvent.outcomeResolution >= 0, "Market not resolved");
+
         PoolId poolId = pmmEvent.lpPools[uint256(int256(pmmEvent.outcomeResolution))];
         PoolKey memory poolKey = poolKeys[poolId];
 
@@ -322,9 +333,69 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         return lpPools;
     }
 
+
+    /**
+     * @notice Returns the internal hooks registration bitmap
+     * @dev This function defines which hooks are enabled for the prediction market
+     * @return uint16 A bitmap representing the enabled hooks
+     */
+    function getInternalHooksRegistrationBitmap() internal pure virtual returns (uint16) {
+        return _internalHooksRegistrationBitmapFrom(
+            CLBaseHook.Permissions({
+                beforeInitialize: true, // Deploy oracles, initialize market, event
+                afterInitialize: false, // Not needed for this implementation
+                beforeAddLiquidity: true, // Only allow hook to add liquidity
+                afterAddLiquidity: true, // Track supply of USDM
+                beforeRemoveLiquidity: true, // Only allow hook to remove liquidity
+                afterRemoveLiquidity: true, // Track supply of USDM
+                beforeSwap: true, // Check if outcome has been set
+                afterSwap: true, // Calculate supply of outcome tokens in pool
+                beforeDonate: false, // Donation not implemented
+                afterDonate: false, // Donation not implemented
+                beforeSwapReturnsDelta: false, // Not needed for this implementation
+                afterSwapReturnsDelta: false, // Not needed for this implementation
+                afterAddLiquidityReturnsDelta: false, // Not needed for this implementation
+                afterRemoveLiquidityReturnsDelta: false // Not needed for this implementation
+            })
+        );
+    }
+
+    /**
+     * @notice Converts the CLBaseHook.Permissions struct to a bitmap
+     * @dev This function is used internally to generate the hooks registration bitmap
+     * @param permissions A struct containing boolean flags for each hook
+     * @return uint16 The resulting bitmap representing enabled hooks
+     */
+    function _internalHooksRegistrationBitmapFrom(CLBaseHook.Permissions memory permissions) internal virtual pure returns (uint16) {
+        // Convert each permission to its corresponding bit in the bitmap
+        return uint16(
+            (permissions.beforeInitialize ? 1 << HOOKS_BEFORE_INITIALIZE_OFFSET : 0)
+                | (permissions.afterInitialize ? 1 << HOOKS_AFTER_INITIALIZE_OFFSET : 0)
+                | (permissions.beforeAddLiquidity ? 1 << HOOKS_BEFORE_ADD_LIQUIDITY_OFFSET : 0)
+                | (permissions.afterAddLiquidity ? 1 << HOOKS_AFTER_ADD_LIQUIDITY_OFFSET : 0)
+                | (permissions.beforeRemoveLiquidity ? 1 << HOOKS_BEFORE_REMOVE_LIQUIDITY_OFFSET : 0)
+                | (permissions.afterRemoveLiquidity ? 1 << HOOKS_AFTER_REMOVE_LIQUIDITY_OFFSET : 0)
+                | (permissions.beforeSwap ? 1 << HOOKS_BEFORE_SWAP_OFFSET : 0)
+                | (permissions.afterSwap ? 1 << HOOKS_AFTER_SWAP_OFFSET : 0)
+                | (permissions.beforeDonate ? 1 << HOOKS_BEFORE_DONATE_OFFSET : 0)
+                | (permissions.afterDonate ? 1 << HOOKS_AFTER_DONATE_OFFSET : 0)
+                | (permissions.beforeSwapReturnsDelta ? 1 << HOOKS_BEFORE_SWAP_RETURNS_DELTA_OFFSET : 0)
+                | (permissions.afterSwapReturnsDelta ? 1 << HOOKS_AFTER_SWAP_RETURNS_DELTA_OFFSET : 0)
+                | (permissions.afterAddLiquidityReturnsDelta ? 1 << HOOKS_AFTER_ADD_LIQUIDIY_RETURNS_DELTA_OFFSET : 0)
+                | (permissions.afterRemoveLiquidityReturnsDelta ? 1 << HOOKS_AFTER_REMOVE_LIQUIDIY_RETURNS_DELTA_OFFSET : 0)
+        );
+    }
+
     function _getPoolKey(IERC20 outcomeToken, IERC20 usdmToken) internal view returns (PoolKey memory) {
         (Currency currency0, Currency currency1) = SortTokens.sort(outcomeToken, usdmToken);
-        return PoolKey(currency0, currency1, FEE, TICK_SPACING, IHooks(address(this)));
+        return PoolKey(
+          currency0,
+          currency1, 
+          IHooks(address(this)), 
+          manager, 
+          FEE, 
+          CLPoolParametersHelper.setTickSpacing(bytes32(uint256(getInternalHooksRegistrationBitmap())), 1)
+        );
     }
 
     function _initializePool(PoolKey memory poolKey, IERC20 outcomeToken) internal {
@@ -332,7 +403,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         (int24 lowerTick, int24 upperTick) = getInitialOutcomeTokenTickRange(isToken0);
         int24 initialTick = isToken0 ? lowerTick - TICK_SPACING : upperTick + TICK_SPACING;
 
-        uint160 initialSqrtPricex96 = TickMath.getSqrtPriceAtTick(initialTick);
+        uint160 initialSqrtPricex96 = TickMath.getSqrtRatioAtTick(initialTick);
         manager.initialize(poolKey, initialSqrtPricex96, ZERO_BYTES);
         poolKeys[poolKey.toId()] = poolKey;
     }
@@ -356,14 +427,14 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
             bool isOutcomeToken0 = poolKey.currency0.toId() != usdm.toId();
             (int24 tickLower, int24 tickUpper) = getInitialOutcomeTokenTickRange(isOutcomeToken0);
 
-            IPoolManager.ModifyLiquidityParams memory liquidityParams = IPoolManager.ModifyLiquidityParams({
+            ICLPoolManager.ModifyLiquidityParams memory liquidityParams = ICLPoolManager.ModifyLiquidityParams({
                 tickLower: tickLower,
                 tickUpper: tickUpper,
                 liquidityDelta: 100e18,
                 salt: 0 // Optionally introduce salt to prevent duplicate liquidity provision
             });
             hookProvidedLiquidityForPool[poolId] = liquidityParams;
-            modifyLiquidityRouter.modifyLiquidity(poolKey, liquidityParams, ZERO_BYTES, false, false);
+            modifyLiquidityRouter.modifyPosition(poolKey, liquidityParams, ZERO_BYTES);
         }
     }
 
@@ -396,7 +467,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
 
         // Map pool IDs to the event for easier indexing
         for (uint256 i = 0; i < lpPools.length; i++) {
-            poolIdToEvent[lpPools[i]] = newEvent;
+            poolIdToEventId[lpPools[i]] = eventId;
         }
 
         emit EventCreated(eventId);
@@ -410,7 +481,7 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
      * @param oracle The oracle used for the market
      * @return marketId The ID of the created market
      */
-    function _createMarket(uint24 fee, bytes32 eventId, IOracle oracle) internal returns (bytes32 marketId) {
+    function _createMarket(uint24 fee, bytes32 eventId, IOracle oracle, PoolId[] memory lpPools) internal returns (bytes32 marketId) {
         Market memory market = Market({
             stage: Stage.CREATED,
             creator: msg.sender,
@@ -424,6 +495,11 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         marketId = keccak256(abi.encode(market));
         markets[marketId] = market;
         userMarkets[msg.sender].push(marketId);
+
+         // Map pool IDs to the event for easier indexing
+        for (uint256 i = 0; i < lpPools.length; i++) {
+            poolIdToMarketId[lpPools[i]] = marketId;
+        }
 
         emit MarketCreated(marketId, msg.sender);
         return marketId;
@@ -454,37 +530,56 @@ abstract contract PredictionMarket is ReentrancyGuard, IPredictionMarket {
         }
     }
 
-    /**
-     * @notice Gets the inverse square root price
-     * @param sqrtPriceX96 The square root price in Q64.96 format
-     * @return The inverse square root price
-     */
-    function getInverseSqrt(uint160 sqrtPriceX96) public pure returns (uint256) {
-        // sqrtPriceX96 is the sqrt(p) represented in Q64.96
-        // To get 1 / sqrt(p), divide 1 (represented as Q96) by sqrtPriceX96
-        return FullMath.mulDiv(FixedPoint96.Q96, FixedPoint96.Q96, uint256(sqrtPriceX96));
-    }
+    function getPriceInUsdm(PoolId poolId) public view returns (uint256) {
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(poolId);
+        require(sqrtPriceX96 != 0, "Invalid pool ID, price=0");
+        
+        uint256 sqrtPriceX96Uint = uint256(sqrtPriceX96);
+        PoolKey memory poolKey = poolKeys[poolId];
+        Currency curr0 = poolKey.currency0;
+        Currency curr1 = poolKey.currency1;
+        uint8 curr0Decimals = ERC20(Currency.unwrap(curr0)).decimals();
+        uint8 curr1Decimals = ERC20(Currency.unwrap(curr1)).decimals();
 
-    // Function to calculate the closest low tick
-    function getClosestLowTick(int24 tick) public pure returns (int24) {
-        // Convert uint16 tickSpacing to int24 in two steps
-        int24 remainder = tick % TICK_SPACING;
-        if (remainder < 0) {
-            return (tick / TICK_SPACING) * TICK_SPACING - TICK_SPACING;
-        } else {
-            return (tick / TICK_SPACING) * TICK_SPACING;
+        bool isCurr0Usdm = curr0.toId() == usdm.toId();
+        bool isCurr1Usdm = curr1.toId() == usdm.toId();
+
+        require(isCurr0Usdm || isCurr1Usdm, "Neither currency is USDM");
+
+        uint256 price;
+
+        if (isCurr0Usdm) {
+            // curr0 is USDM, calculate price of curr1 in terms of USDM (inverse price)
+            uint256 numerator = (1 << 192) * 1e18;
+            uint256 denominator = sqrtPriceX96Uint * sqrtPriceX96Uint;
+            uint256 decimalsDifference;
+
+            if (curr1Decimals >= curr0Decimals) {
+                decimalsDifference = curr1Decimals - curr0Decimals;
+                numerator *= 10 ** decimalsDifference;
+            } else {
+                decimalsDifference = curr0Decimals - curr1Decimals;
+                denominator *= 10 ** decimalsDifference;
+            }
+
+            price = numerator / denominator;
+        } else if (isCurr1Usdm) {
+            // curr1 is USDM, calculate price of curr0 in terms of USDM
+            uint256 numerator = sqrtPriceX96Uint * sqrtPriceX96Uint * 1e18;
+            uint256 denominator = 1 << 192;
+            uint256 decimalsDifference;
+
+            if (curr0Decimals >= curr1Decimals) {
+                decimalsDifference = curr0Decimals - curr1Decimals;
+                numerator *= 10 ** decimalsDifference;
+            } else {
+                decimalsDifference = curr1Decimals - curr0Decimals;
+                denominator *= 10 ** decimalsDifference;
+            }
+
+            price = numerator / denominator;
         }
-    }
 
-    // Function to calculate the closest high tick
-    function getClosestHighTick(int24 tick) public pure returns (int24) {
-        // Convert uint16 tickSpacing to int24 in two steps
-        int24 closestLowTick = getClosestLowTick(tick);
-
-        if (tick % TICK_SPACING == 0) {
-            return closestLowTick; // Tick is exactly on a spacing boundary
-        } else {
-            return closestLowTick + TICK_SPACING;
-        }
+        return price;
     }
 }

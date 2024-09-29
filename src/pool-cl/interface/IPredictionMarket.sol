@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import {Currency} from "v4-core/src/types/Currency.sol";
-import {PoolKey} from "v4-core/src/types/PoolKey.sol";
-import {PoolId} from "v4-core/src/types/PoolId.sol";
+import {Currency} from "pancake-v4-core/src/types/Currency.sol";
+import {PoolKey} from "pancake-v4-core/src/types/PoolKey.sol";
+import {PoolId} from "pancake-v4-core/src/types/PoolId.sol";
 import {IOracle} from "./IOracle.sol";
 
 interface IPredictionMarket {
@@ -63,4 +63,8 @@ interface IPredictionMarket {
     function settle(bytes32 marketId, int16 outcome) external;
 
     function isMarketResolved(bytes32 marketId) external view returns (bool);
+
+    function amountToClaim(bytes32 marketId) external view returns (uint256);
+
+    function claim(bytes32 marketId, uint256 outcomeTokenAmountToClaim) external returns (uint256);
 }
