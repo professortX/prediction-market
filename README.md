@@ -9,7 +9,7 @@ ERC20 tokens offer traders the potential for unlimited upside, enhancing the ove
 
 At the end of the settlement date, a portion of the trading fees and the entire USD reserves of the losing pool will be distributed the holders of the winning outcome token. Eigenlayer AVS / Optimistic Oracles (e.g. UMA) will be used as an oracle to determine the event outcome.
 
-### ** Brevis Usage **
+### **Brevis Usage**
 
 With Brevis, Our protocol has unlocked the possibility of becoming more data centric protocol, We are using brevis to read historial on chain data of our Pancakeswap swap functions, and calculate the top traders over a period of time. Finally, we will distribute Rewards from our Protocol Revenue to the top traders 🏆
 
@@ -35,3 +35,9 @@ Other than writing unit tests (recommended!), you can only deploy & test hooks o
 ```
 
 To kill the anvil process, you may run `kill-anvil.sh`.
+
+---
+
+## Architecture
+<img width="632" alt="Screenshot 2024-09-30 at 11 51 05 AM" src="https://github.com/user-attachments/assets/b4447f38-e377-4ee6-abbc-2c92e0d25a02">
+
