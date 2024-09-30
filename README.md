@@ -11,7 +11,7 @@ At the end of the settlement date, a portion of the trading fees and the entire 
 
 ### ** Brevis Usage **
 
-With Brevis, Our protocol has unlocked the possibility of becoming more data centric protocol, We are using brevis to read historial on chain data of our uniswap swap functions, and calculate the top traders over a period of time. Finally, we will distribute Rewards from our Protocol Revenue to the top traders 🏆
+With Brevis, Our protocol has unlocked the possibility of becoming more data centric protocol, We are using brevis to read historial on chain data of our Pancakeswap swap functions, and calculate the top traders over a period of time. Finally, we will distribute Rewards from our Protocol Revenue to the top traders 🏆
 
 More info in: https://github.com/professortX/prediction-market/tree/main/brevis
 
